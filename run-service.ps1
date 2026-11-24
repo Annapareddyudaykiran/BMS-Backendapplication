@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('auth', 'attendance', 'gateway')]
+    [ValidateSet('auth', 'attendance', 'gateway', 'work-orders', 'assets', 'inventory', 'hse', 'amc', 'iot')]
     [string]$Service
 )
 
@@ -9,6 +9,12 @@ $serviceDirectory = switch ($Service) {
     'auth' { 'auth-service' }
     'attendance' { 'attendance-service' }
     'gateway' { 'api-gateway' }
+    'work-orders' { 'work-order-service' }
+    'assets' { 'asset-service' }
+    'inventory' { 'inventory-service' }
+    'hse' { 'hse-safety-service' }
+    'amc' { 'amc-vendor-service' }
+    'iot' { 'iot-service' }
 }
 
 Push-Location $PSScriptRoot

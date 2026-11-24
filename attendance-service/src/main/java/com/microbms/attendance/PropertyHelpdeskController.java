@@ -53,14 +53,13 @@ public class PropertyHelpdeskController {
         return Map.of("id",id,"towerId",r.towerId(),"floorNumber",r.floorNumber(),"unitNumber",r.unitNumber(),"spaceType",r.spaceType(),"occupancy",r.occupancy());
     }
     @GetMapping("/helpdesk/tickets") public List<Map<String,Object>> tickets(@RequestAttribute("authenticatedUserEmail") String actor) {
-        requireAdmin(actor); return db.queryForList("SELECT tk.id, 'TKT-'||tk.ticket_number AS \"ticketNumber\",tk.description,tk.floor_area AS \"floorArea\",tk.category,tk.priority,tk.status,tk.created_at AS \"createdAt\",t.name AS tower,u.unit_number AS \"unitNumber\",w.status AS \"workOrderStatus\",worker.name AS \"ownerName\" FROM helpdesk_tickets tk JOIN property_towers t ON t.id=tk.tower_id LEFT JOIN property_units u ON u.id=tk.unit_id JOIN work_orders w ON w.ticket_id=tk.id LEFT JOIN attendance_workers worker ON worker.id=w.owner_worker_id ORDER BY tk.created_at DESC");
+        requireAdmin(actor); return db.queryForList("SELECT tk.id, 'TKT-'||tk.ticket_number AS \"ticketNumber\",tk.description,tk.floor_area AS \"floorArea\",tk.category,tk.priority,tk.status,tk.created_at AS \"createdAt\",t.name AS tower,u.unit_number AS \"unitNumber\",'Created in Work Orders' AS \"workOrderStatus\",NULL AS \"ownerName\" FROM helpdesk_tickets tk JOIN property_towers t ON t.id=tk.tower_id LEFT JOIN property_units u ON u.id=tk.unit_id ORDER BY tk.created_at DESC");
     }
     @PostMapping("/helpdesk/tickets") @ResponseStatus(HttpStatus.CREATED)
     public Map<String,Object> createTicket(@RequestAttribute("authenticatedUserId") UUID userId,@RequestAttribute("authenticatedUserEmail") String actor,@Valid @RequestBody TicketRequest r) {
         requireAdmin(actor);
         if (r.unitId()!=null && !Boolean.TRUE.equals(db.queryForObject("SELECT EXISTS(SELECT 1 FROM property_units WHERE id=? AND tower_id=?)",Boolean.class,r.unitId(),r.towerId()))) throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Unit must belong to the selected tower");
         UUID id=UUID.randomUUID(); db.update("INSERT INTO helpdesk_tickets(id,description,tower_id,floor_area,unit_id,category,priority,created_by) VALUES(?,?,?,?,?,?,?,?)",id,r.description().trim(),r.towerId(),r.floorArea(),r.unitId(),r.category(),r.priority(),userId);
-        db.update("INSERT INTO work_orders(ticket_id) VALUES(?)",id);
         return db.queryForMap("SELECT id,'TKT-'||ticket_number AS \"ticketNumber\",description,floor_area AS \"floorArea\",category,priority,status FROM helpdesk_tickets WHERE id=?",id);
     }
     private void requireAdmin(String email) { if(email==null || !email.trim().equalsIgnoreCase(adminEmail)) throw new ResponseStatusException(HttpStatus.FORBIDDEN,"Only the attendance administrator can manage property and helpdesk"); }
