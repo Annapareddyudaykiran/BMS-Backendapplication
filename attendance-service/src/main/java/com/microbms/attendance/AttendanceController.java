@@ -24,14 +24,12 @@ public class AttendanceController {
     private final LocalTime defaultShiftStart;
     private final LocalTime defaultShiftEnd;
     private final String defaultZoneId;
-    private final String adminEmail;
 
     public AttendanceController(AttendanceRepository records, AttendanceShiftRepository shifts,
                                 WorkerRepository workers, Clock clock,
                                 @Value("${app.attendance.default-shift-start}") LocalTime defaultShiftStart,
                                 @Value("${app.attendance.default-shift-end}") LocalTime defaultShiftEnd,
-                                @Value("${app.attendance.zone-id}") String defaultZoneId,
-                                @Value("${app.attendance.admin-email}") String adminEmail) {
+                                @Value("${app.attendance.zone-id}") String defaultZoneId) {
         if (defaultShiftStart.equals(defaultShiftEnd)) throw new IllegalStateException("Default shift start and end must differ");
         ZoneId.of(defaultZoneId);
         this.records = records;
@@ -41,7 +39,6 @@ public class AttendanceController {
         this.defaultShiftStart = defaultShiftStart;
         this.defaultShiftEnd = defaultShiftEnd;
         this.defaultZoneId = defaultZoneId;
-        this.adminEmail = adminEmail.trim().toLowerCase();
     }
 
     public record WorkerRequest(@NotBlank @Size(max = 120) String name,
@@ -71,16 +68,13 @@ public class AttendanceController {
     public record StatusView(boolean checkedIn, ShiftView shift, AttendanceView attendance) { }
 
     @GetMapping("/workers")
-    public List<WorkerView> workerList(@RequestAttribute("authenticatedUserEmail") String actorEmail) {
-        requireAdmin(actorEmail);
+    public List<WorkerView> workerList() {
         return workers.findAllByOrderByNameAsc().stream().map(WorkerView::from).toList();
     }
 
     @PostMapping("/workers")
     @ResponseStatus(HttpStatus.CREATED)
-    public WorkerView createWorker(@RequestAttribute("authenticatedUserEmail") String actorEmail,
-                                   @Valid @RequestBody WorkerRequest request) {
-        requireAdmin(actorEmail);
+    public WorkerView createWorker(@Valid @RequestBody WorkerRequest request) {
         String code = request.employeeCode() == null || request.employeeCode().isBlank()
                 ? null : request.employeeCode().trim().toUpperCase();
         if (code != null && workers.findByEmployeeCodeIgnoreCase(code).isPresent()) {
@@ -92,8 +86,7 @@ public class AttendanceController {
     @DeleteMapping("/workers/{workerId}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     @Transactional
-    public void deactivateWorker(@RequestAttribute("authenticatedUserEmail") String actorEmail, @PathVariable UUID workerId) {
-        requireAdmin(actorEmail);
+    public void deactivateWorker(@PathVariable UUID workerId) {
         Worker worker = activeWorker(workerId);
         if (records.findFirstByWorkerIdAndCheckOutIsNullOrderByCheckInDesc(workerId).isPresent()) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Check out this worker before deactivating them");
@@ -102,8 +95,7 @@ public class AttendanceController {
     }
 
     @GetMapping("/shift")
-    public ShiftView shift(@RequestAttribute("authenticatedUserEmail") String actorEmail, @RequestParam UUID workerId) {
-        requireAdmin(actorEmail);
+    public ShiftView shift(@RequestParam UUID workerId) {
         return ShiftView.from(assignedShift(findWorker(workerId)));
     }
 
@@ -111,9 +103,7 @@ public class AttendanceController {
     @ResponseStatus(HttpStatus.CREATED)
     @Transactional
     public AttendanceView checkIn(@RequestAttribute("authenticatedUserId") UUID actorId,
-                                  @RequestAttribute("authenticatedUserEmail") String actorEmail,
                                   @Valid @RequestBody PunchRequest request) {
-        requireAdmin(actorEmail);
         Worker worker = activeWorker(request.workerId());
         if (records.findFirstByWorkerIdAndCheckOutIsNullOrderByCheckInDesc(worker.getId()).isPresent()) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, worker.getName() + " is already checked in");
@@ -124,9 +114,7 @@ public class AttendanceController {
 
     @PostMapping("/check-out")
     @Transactional
-    public AttendanceView checkOut(@RequestAttribute("authenticatedUserEmail") String actorEmail,
-                                   @Valid @RequestBody PunchRequest request) {
-        requireAdmin(actorEmail);
+    public AttendanceView checkOut(@Valid @RequestBody PunchRequest request) {
         Worker worker = activeWorker(request.workerId());
         AttendanceRecord record = records.findFirstByWorkerIdAndCheckOutIsNullOrderByCheckInDesc(worker.getId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, worker.getName() + " has no active check-in"));
@@ -139,11 +127,9 @@ public class AttendanceController {
     }
 
     @GetMapping
-    public List<AttendanceView> history(@RequestAttribute("authenticatedUserEmail") String actorEmail,
-                                        @RequestParam UUID workerId,
+    public List<AttendanceView> history(@RequestParam UUID workerId,
                                         @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
                                         @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
-        requireAdmin(actorEmail);
         Worker worker = findWorker(workerId);
         ZoneId zone = ZoneId.of(assignedShift(worker).getZoneId());
         LocalDate today = LocalDate.now(clock.withZone(zone));
@@ -158,8 +144,7 @@ public class AttendanceController {
 
     @GetMapping("/status")
     @Transactional
-    public StatusView status(@RequestAttribute("authenticatedUserEmail") String actorEmail, @RequestParam UUID workerId) {
-        requireAdmin(actorEmail);
+    public StatusView status(@RequestParam UUID workerId) {
         Worker worker = findWorker(workerId);
         AttendanceShift shift = assignedShift(worker);
         ZoneId zone = ZoneId.of(shift.getZoneId());
@@ -169,12 +154,6 @@ public class AttendanceController {
         var open = records.findFirstByWorkerIdAndCheckOutIsNullOrderByCheckInDesc(workerId);
         var current = open.isPresent() ? open : records.findFirstByWorkerIdAndCheckInGreaterThanEqualAndCheckInLessThanOrderByCheckInDesc(workerId, start, end);
         return new StatusView(open.isPresent(), ShiftView.from(shift), current.map(AttendanceView::from).orElse(null));
-    }
-
-    private void requireAdmin(String email) {
-        if (email == null || !adminEmail.equals(email.trim().toLowerCase())) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Only the attendance administrator can manage workers and punches");
-        }
     }
 
     private Worker activeWorker(UUID workerId) {

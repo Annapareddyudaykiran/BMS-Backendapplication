@@ -4,7 +4,6 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.*;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 import java.util.*;
@@ -13,8 +12,7 @@ import java.util.*;
 @RequestMapping("/api")
 public class PropertyHelpdeskController {
     private final JdbcTemplate db;
-    private final String adminEmail;
-    public PropertyHelpdeskController(JdbcTemplate db, @Value("${app.attendance.admin-email}") String adminEmail) { this.db = db; this.adminEmail=adminEmail.trim().toLowerCase(); }
+    public PropertyHelpdeskController(JdbcTemplate db) { this.db = db; }
     public record TowerRequest(@NotBlank @Size(max=80) String name, @Min(1) @Max(100) int floorCount) {}
     public record PropertyRequest(@NotBlank @Size(max=160) String name, @NotBlank @Size(max=100) String city,
                                   @NotBlank @Size(max=100) String state, @NotBlank @Size(max=40) String propertyType) {}
@@ -33,34 +31,31 @@ public class PropertyHelpdeskController {
         return Map.of("property",p,"towers",towers,"units",units);
     }
     @PutMapping("/property")
-    public Map<String,Object> updateProperty(@RequestAttribute("authenticatedUserEmail") String actor, @Valid @RequestBody PropertyRequest r) {
-        requireAdmin(actor);
+    public Map<String,Object> updateProperty(@Valid @RequestBody PropertyRequest r) {
         UUID propertyId = db.queryForObject("SELECT id FROM properties ORDER BY created_at LIMIT 1", UUID.class);
         db.update("UPDATE properties SET name=?,city=?,state=?,property_type=? WHERE id=?", r.name().trim(), r.city().trim(), r.state().trim(), r.propertyType().trim(), propertyId);
         return Map.of("id",propertyId,"name",r.name().trim(),"city",r.city().trim(),"state",r.state().trim(),"propertyType",r.propertyType().trim());
     }
     @PostMapping("/property/towers") @ResponseStatus(HttpStatus.CREATED)
-    public Map<String,Object> createTower(@RequestAttribute("authenticatedUserEmail") String actor, @Valid @RequestBody TowerRequest r) {
-        requireAdmin(actor); UUID property = db.queryForObject("SELECT id FROM properties ORDER BY created_at LIMIT 1", UUID.class);
+    public Map<String,Object> createTower(@Valid @RequestBody TowerRequest r) {
+        UUID property = db.queryForObject("SELECT id FROM properties ORDER BY created_at LIMIT 1", UUID.class);
         UUID id = UUID.randomUUID(); db.update("INSERT INTO property_towers(id,property_id,name,floor_count) VALUES(?,?,?,?)",id,property,r.name().trim(),r.floorCount());
         return Map.of("id",id,"name",r.name().trim(),"floorCount",r.floorCount());
     }
     @PostMapping("/property/units") @ResponseStatus(HttpStatus.CREATED)
-    public Map<String,Object> createUnit(@RequestAttribute("authenticatedUserEmail") String actor, @Valid @RequestBody UnitRequest r) {
-        requireAdmin(actor); Integer floors = db.queryForObject("SELECT floor_count FROM property_towers WHERE id=?",Integer.class,r.towerId());
+    public Map<String,Object> createUnit(@Valid @RequestBody UnitRequest r) {
+        Integer floors = db.queryForObject("SELECT floor_count FROM property_towers WHERE id=?",Integer.class,r.towerId());
         if (floors==null || r.floorNumber()>floors) throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Choose a valid tower and floor");
         UUID id=UUID.randomUUID(); db.update("INSERT INTO property_units(id,tower_id,floor_number,unit_number,space_type,occupancy,occupant) VALUES(?,?,?,?,?,?,?)",id,r.towerId(),r.floorNumber(),r.unitNumber().trim(),r.spaceType(),r.occupancy(),r.occupant());
         return Map.of("id",id,"towerId",r.towerId(),"floorNumber",r.floorNumber(),"unitNumber",r.unitNumber(),"spaceType",r.spaceType(),"occupancy",r.occupancy());
     }
-    @GetMapping("/helpdesk/tickets") public List<Map<String,Object>> tickets(@RequestAttribute("authenticatedUserEmail") String actor) {
-        requireAdmin(actor); return db.queryForList("SELECT tk.id, 'TKT-'||tk.ticket_number AS \"ticketNumber\",tk.description,tk.floor_area AS \"floorArea\",tk.category,tk.priority,tk.status,tk.created_at AS \"createdAt\",t.name AS tower,u.unit_number AS \"unitNumber\",'Created in Work Orders' AS \"workOrderStatus\",NULL AS \"ownerName\" FROM helpdesk_tickets tk JOIN property_towers t ON t.id=tk.tower_id LEFT JOIN property_units u ON u.id=tk.unit_id ORDER BY tk.created_at DESC");
+    @GetMapping("/helpdesk/tickets") public List<Map<String,Object>> tickets() {
+        return db.queryForList("SELECT tk.id, 'TKT-'||tk.ticket_number AS \"ticketNumber\",tk.description,tk.floor_area AS \"floorArea\",tk.category,tk.priority,tk.status,tk.created_at AS \"createdAt\",t.name AS tower,u.unit_number AS \"unitNumber\",'Created in Work Orders' AS \"workOrderStatus\",NULL AS \"ownerName\" FROM helpdesk_tickets tk JOIN property_towers t ON t.id=tk.tower_id LEFT JOIN property_units u ON u.id=tk.unit_id ORDER BY tk.created_at DESC");
     }
     @PostMapping("/helpdesk/tickets") @ResponseStatus(HttpStatus.CREATED)
-    public Map<String,Object> createTicket(@RequestAttribute("authenticatedUserId") UUID userId,@RequestAttribute("authenticatedUserEmail") String actor,@Valid @RequestBody TicketRequest r) {
-        requireAdmin(actor);
+    public Map<String,Object> createTicket(@RequestAttribute("authenticatedUserId") UUID userId,@Valid @RequestBody TicketRequest r) {
         if (r.unitId()!=null && !Boolean.TRUE.equals(db.queryForObject("SELECT EXISTS(SELECT 1 FROM property_units WHERE id=? AND tower_id=?)",Boolean.class,r.unitId(),r.towerId()))) throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Unit must belong to the selected tower");
         UUID id=UUID.randomUUID(); db.update("INSERT INTO helpdesk_tickets(id,description,tower_id,floor_area,unit_id,category,priority,created_by) VALUES(?,?,?,?,?,?,?,?)",id,r.description().trim(),r.towerId(),r.floorArea(),r.unitId(),r.category(),r.priority(),userId);
         return db.queryForMap("SELECT id,'TKT-'||ticket_number AS \"ticketNumber\",description,floor_area AS \"floorArea\",category,priority,status FROM helpdesk_tickets WHERE id=?",id);
     }
-    private void requireAdmin(String email) { if(email==null || !email.trim().equalsIgnoreCase(adminEmail)) throw new ResponseStatusException(HttpStatus.FORBIDDEN,"Only the attendance administrator can manage property and helpdesk"); }
 }
