@@ -7,6 +7,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 public interface WorkerRepository extends JpaRepository<Worker, UUID> {
-    List<Worker> findAllByOrderByNameAsc();
-    Optional<Worker> findByEmployeeCodeIgnoreCase(String employeeCode);
+    List<Worker> findAllByOwnerEmailOrderByNameAsc(String ownerEmail);
+    Optional<Worker> findByOwnerEmailAndEmployeeCodeIgnoreCase(String ownerEmail, String employeeCode);
+    Optional<Worker> findByIdAndOwnerEmail(UUID id, String ownerEmail);
 }

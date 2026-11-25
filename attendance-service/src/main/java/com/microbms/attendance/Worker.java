@@ -20,6 +20,9 @@ public class Worker {
     @Column(name = "employee_code", length = 40)
     private String employeeCode;
 
+    @Column(name = "owner_email", nullable = false, length = 254)
+    private String ownerEmail;
+
     @Column(nullable = false)
     private boolean active;
 
@@ -28,10 +31,11 @@ public class Worker {
 
     protected Worker() { }
 
-    public Worker(String name, String employeeCode) {
+    public Worker(String name, String employeeCode, String ownerEmail) {
         this.id = UUID.randomUUID();
         this.name = name;
         this.employeeCode = employeeCode;
+        this.ownerEmail = ownerEmail;
         this.active = true;
         this.createdAt = Instant.now();
     }
@@ -39,6 +43,7 @@ public class Worker {
     public UUID getId() { return id; }
     public String getName() { return name; }
     public String getEmployeeCode() { return employeeCode; }
+    public String getOwnerEmail() { return ownerEmail; }
     public boolean isActive() { return active; }
     public Instant getCreatedAt() { return createdAt; }
 

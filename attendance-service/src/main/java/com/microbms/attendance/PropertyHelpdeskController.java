@@ -13,6 +13,7 @@ import java.util.*;
 public class PropertyHelpdeskController {
     private final JdbcTemplate db;
     public PropertyHelpdeskController(JdbcTemplate db) { this.db = db; }
+
     public record TowerRequest(@NotBlank @Size(max=80) String name, @Min(1) @Max(100) int floorCount) {}
     public record PropertyRequest(@NotBlank @Size(max=160) String name, @NotBlank @Size(max=100) String city,
                                   @NotBlank @Size(max=100) String state, @NotBlank @Size(max=40) String propertyType) {}
@@ -24,38 +25,51 @@ public class PropertyHelpdeskController {
                                 @NotBlank @Size(max=60) String category,
                                 @NotBlank @Pattern(regexp="Critical|High|Medium|Low") String priority) {}
 
-    @GetMapping("/property") public Map<String,Object> property() {
-        var p = db.queryForMap("SELECT id,name,city,state,property_type AS \"propertyType\" FROM properties ORDER BY created_at LIMIT 1");
+    @GetMapping("/property")
+    public Map<String,Object> property(@RequestAttribute("authenticatedUserEmail") String owner) {
+        db.update("INSERT INTO properties(name,city,state,property_type,owner_email) VALUES('My Property','Not set','Not set','Other',?) ON CONFLICT(owner_email) DO NOTHING", owner);
+        var p = db.queryForMap("SELECT id,name,city,state,property_type AS \"propertyType\" FROM properties WHERE owner_email=?", owner);
         var towers = db.queryForList("SELECT t.id,t.name,t.floor_count AS \"floorCount\", count(u.id) AS \"unitCount\", count(u.id) FILTER (WHERE u.occupancy='Occupied') AS occupied FROM property_towers t LEFT JOIN property_units u ON u.tower_id=t.id WHERE t.property_id=? GROUP BY t.id ORDER BY t.name", p.get("id"));
         var units = db.queryForList("SELECT u.id,u.tower_id AS \"towerId\",u.floor_number AS \"floorNumber\",u.unit_number AS \"unitNumber\",u.space_type AS \"spaceType\",u.occupancy,u.occupant FROM property_units u JOIN property_towers t ON t.id=u.tower_id WHERE t.property_id=? ORDER BY t.name,u.floor_number,u.unit_number", p.get("id"));
         return Map.of("property",p,"towers",towers,"units",units);
     }
+
     @PutMapping("/property")
-    public Map<String,Object> updateProperty(@Valid @RequestBody PropertyRequest r) {
-        UUID propertyId = db.queryForObject("SELECT id FROM properties ORDER BY created_at LIMIT 1", UUID.class);
-        db.update("UPDATE properties SET name=?,city=?,state=?,property_type=? WHERE id=?", r.name().trim(), r.city().trim(), r.state().trim(), r.propertyType().trim(), propertyId);
+    public Map<String,Object> updateProperty(@RequestAttribute("authenticatedUserEmail") String owner, @Valid @RequestBody PropertyRequest r) {
+        UUID propertyId = db.queryForObject("SELECT id FROM properties WHERE owner_email=?", UUID.class, owner);
+        db.update("UPDATE properties SET name=?,city=?,state=?,property_type=? WHERE id=? AND owner_email=?", r.name().trim(), r.city().trim(), r.state().trim(), r.propertyType().trim(), propertyId, owner);
         return Map.of("id",propertyId,"name",r.name().trim(),"city",r.city().trim(),"state",r.state().trim(),"propertyType",r.propertyType().trim());
     }
+
     @PostMapping("/property/towers") @ResponseStatus(HttpStatus.CREATED)
-    public Map<String,Object> createTower(@Valid @RequestBody TowerRequest r) {
-        UUID property = db.queryForObject("SELECT id FROM properties ORDER BY created_at LIMIT 1", UUID.class);
+    public Map<String,Object> createTower(@RequestAttribute("authenticatedUserEmail") String owner, @Valid @RequestBody TowerRequest r) {
+        UUID property = db.queryForObject("SELECT id FROM properties WHERE owner_email=?", UUID.class, owner);
         UUID id = UUID.randomUUID(); db.update("INSERT INTO property_towers(id,property_id,name,floor_count) VALUES(?,?,?,?)",id,property,r.name().trim(),r.floorCount());
         return Map.of("id",id,"name",r.name().trim(),"floorCount",r.floorCount());
     }
+
     @PostMapping("/property/units") @ResponseStatus(HttpStatus.CREATED)
-    public Map<String,Object> createUnit(@Valid @RequestBody UnitRequest r) {
-        Integer floors = db.queryForObject("SELECT floor_count FROM property_towers WHERE id=?",Integer.class,r.towerId());
+    public Map<String,Object> createUnit(@RequestAttribute("authenticatedUserEmail") String owner, @Valid @RequestBody UnitRequest r) {
+        List<Integer> matchingFloors = db.query("SELECT t.floor_count FROM property_towers t JOIN properties p ON p.id=t.property_id WHERE t.id=? AND p.owner_email=?", (rs, rowNum) -> rs.getInt(1), r.towerId(), owner);
+        Integer floors = matchingFloors.isEmpty() ? null : matchingFloors.get(0);
         if (floors==null || r.floorNumber()>floors) throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Choose a valid tower and floor");
         UUID id=UUID.randomUUID(); db.update("INSERT INTO property_units(id,tower_id,floor_number,unit_number,space_type,occupancy,occupant) VALUES(?,?,?,?,?,?,?)",id,r.towerId(),r.floorNumber(),r.unitNumber().trim(),r.spaceType(),r.occupancy(),r.occupant());
         return Map.of("id",id,"towerId",r.towerId(),"floorNumber",r.floorNumber(),"unitNumber",r.unitNumber(),"spaceType",r.spaceType(),"occupancy",r.occupancy());
     }
-    @GetMapping("/helpdesk/tickets") public List<Map<String,Object>> tickets() {
-        return db.queryForList("SELECT tk.id, 'TKT-'||tk.ticket_number AS \"ticketNumber\",tk.description,tk.floor_area AS \"floorArea\",tk.category,tk.priority,tk.status,tk.created_at AS \"createdAt\",t.name AS tower,u.unit_number AS \"unitNumber\",'Created in Work Orders' AS \"workOrderStatus\",NULL AS \"ownerName\" FROM helpdesk_tickets tk JOIN property_towers t ON t.id=tk.tower_id LEFT JOIN property_units u ON u.id=tk.unit_id ORDER BY tk.created_at DESC");
+
+    @GetMapping("/helpdesk/tickets")
+    public List<Map<String,Object>> tickets(@RequestAttribute("authenticatedUserEmail") String owner) {
+        return db.queryForList("SELECT tk.id, 'TKT-'||tk.ticket_number AS \"ticketNumber\",tk.description,tk.floor_area AS \"floorArea\",tk.category,tk.priority,tk.status,tk.created_at AS \"createdAt\",t.name AS tower,u.unit_number AS \"unitNumber\",'Created in Work Orders' AS \"workOrderStatus\",NULL AS \"ownerName\" FROM helpdesk_tickets tk JOIN property_towers t ON t.id=tk.tower_id LEFT JOIN property_units u ON u.id=tk.unit_id WHERE tk.owner_email=? ORDER BY tk.created_at DESC", owner);
     }
+
     @PostMapping("/helpdesk/tickets") @ResponseStatus(HttpStatus.CREATED)
-    public Map<String,Object> createTicket(@RequestAttribute("authenticatedUserId") UUID userId,@Valid @RequestBody TicketRequest r) {
-        if (r.unitId()!=null && !Boolean.TRUE.equals(db.queryForObject("SELECT EXISTS(SELECT 1 FROM property_units WHERE id=? AND tower_id=?)",Boolean.class,r.unitId(),r.towerId()))) throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Unit must belong to the selected tower");
-        UUID id=UUID.randomUUID(); db.update("INSERT INTO helpdesk_tickets(id,description,tower_id,floor_area,unit_id,category,priority,created_by) VALUES(?,?,?,?,?,?,?,?)",id,r.description().trim(),r.towerId(),r.floorArea(),r.unitId(),r.category(),r.priority(),userId);
-        return db.queryForMap("SELECT id,'TKT-'||ticket_number AS \"ticketNumber\",description,floor_area AS \"floorArea\",category,priority,status FROM helpdesk_tickets WHERE id=?",id);
+    public Map<String,Object> createTicket(@RequestAttribute("authenticatedUserId") UUID userId,
+                                           @RequestAttribute("authenticatedUserEmail") String owner,
+                                           @Valid @RequestBody TicketRequest r) {
+        boolean ownedTower = Boolean.TRUE.equals(db.queryForObject("SELECT EXISTS(SELECT 1 FROM property_towers t JOIN properties p ON p.id=t.property_id WHERE t.id=? AND p.owner_email=?)",Boolean.class,r.towerId(),owner));
+        if (!ownedTower) throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Choose a tower in your property");
+        if (r.unitId()!=null && !Boolean.TRUE.equals(db.queryForObject("SELECT EXISTS(SELECT 1 FROM property_units u JOIN property_towers t ON t.id=u.tower_id JOIN properties p ON p.id=t.property_id WHERE u.id=? AND u.tower_id=? AND p.owner_email=?)",Boolean.class,r.unitId(),r.towerId(),owner))) throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Unit must belong to the selected tower");
+        UUID id=UUID.randomUUID(); db.update("INSERT INTO helpdesk_tickets(id,description,tower_id,floor_area,unit_id,category,priority,created_by,owner_email) VALUES(?,?,?,?,?,?,?,?,?)",id,r.description().trim(),r.towerId(),r.floorArea(),r.unitId(),r.category(),r.priority(),userId,owner);
+        return db.queryForMap("SELECT id,'TKT-'||ticket_number AS \"ticketNumber\",description,floor_area AS \"floorArea\",category,priority,status FROM helpdesk_tickets WHERE id=? AND owner_email=?",id,owner);
     }
 }

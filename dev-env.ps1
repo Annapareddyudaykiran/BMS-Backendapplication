@@ -1,7 +1,7 @@
 # Dot-source this file in every backend PowerShell terminal:
 #   . .\dev-env.ps1 -Service auth
 # The generated signing key is kept under the current Windows user's LocalAppData,
-# outside the repository, and reused by all three backend applications.
+# outside the repository, and reused by every backend service.
 param(
     [ValidateSet('gateway', 'auth', 'attendance', 'work-orders', 'assets', 'inventory', 'hse', 'amc', 'iot')]
     [string]$Service = 'gateway'

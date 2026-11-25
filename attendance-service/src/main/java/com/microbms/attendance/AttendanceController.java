@@ -68,26 +68,27 @@ public class AttendanceController {
     public record StatusView(boolean checkedIn, ShiftView shift, AttendanceView attendance) { }
 
     @GetMapping("/workers")
-    public List<WorkerView> workerList() {
-        return workers.findAllByOrderByNameAsc().stream().map(WorkerView::from).toList();
+    public List<WorkerView> workerList(@RequestAttribute("authenticatedUserEmail") String ownerEmail) {
+        return workers.findAllByOwnerEmailOrderByNameAsc(ownerEmail).stream().map(WorkerView::from).toList();
     }
 
     @PostMapping("/workers")
     @ResponseStatus(HttpStatus.CREATED)
-    public WorkerView createWorker(@Valid @RequestBody WorkerRequest request) {
+    public WorkerView createWorker(@RequestAttribute("authenticatedUserEmail") String ownerEmail,
+                                   @Valid @RequestBody WorkerRequest request) {
         String code = request.employeeCode() == null || request.employeeCode().isBlank()
                 ? null : request.employeeCode().trim().toUpperCase();
-        if (code != null && workers.findByEmployeeCodeIgnoreCase(code).isPresent()) {
+        if (code != null && workers.findByOwnerEmailAndEmployeeCodeIgnoreCase(ownerEmail, code).isPresent()) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "A worker with this employee code already exists");
         }
-        return WorkerView.from(workers.save(new Worker(request.name().trim(), code)));
+        return WorkerView.from(workers.save(new Worker(request.name().trim(), code, ownerEmail)));
     }
 
     @DeleteMapping("/workers/{workerId}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     @Transactional
-    public void deactivateWorker(@PathVariable UUID workerId) {
-        Worker worker = activeWorker(workerId);
+    public void deactivateWorker(@RequestAttribute("authenticatedUserEmail") String ownerEmail, @PathVariable UUID workerId) {
+        Worker worker = activeWorker(workerId, ownerEmail);
         if (records.findFirstByWorkerIdAndCheckOutIsNullOrderByCheckInDesc(workerId).isPresent()) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Check out this worker before deactivating them");
         }
@@ -95,16 +96,17 @@ public class AttendanceController {
     }
 
     @GetMapping("/shift")
-    public ShiftView shift(@RequestParam UUID workerId) {
-        return ShiftView.from(assignedShift(findWorker(workerId)));
+    public ShiftView shift(@RequestAttribute("authenticatedUserEmail") String ownerEmail, @RequestParam UUID workerId) {
+        return ShiftView.from(assignedShift(findWorker(workerId, ownerEmail)));
     }
 
     @PostMapping("/check-in")
     @ResponseStatus(HttpStatus.CREATED)
     @Transactional
     public AttendanceView checkIn(@RequestAttribute("authenticatedUserId") UUID actorId,
+                                  @RequestAttribute("authenticatedUserEmail") String ownerEmail,
                                   @Valid @RequestBody PunchRequest request) {
-        Worker worker = activeWorker(request.workerId());
+        Worker worker = activeWorker(request.workerId(), ownerEmail);
         if (records.findFirstByWorkerIdAndCheckOutIsNullOrderByCheckInDesc(worker.getId()).isPresent()) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, worker.getName() + " is already checked in");
         }
@@ -114,8 +116,9 @@ public class AttendanceController {
 
     @PostMapping("/check-out")
     @Transactional
-    public AttendanceView checkOut(@Valid @RequestBody PunchRequest request) {
-        Worker worker = activeWorker(request.workerId());
+    public AttendanceView checkOut(@RequestAttribute("authenticatedUserEmail") String ownerEmail,
+                                   @Valid @RequestBody PunchRequest request) {
+        Worker worker = activeWorker(request.workerId(), ownerEmail);
         AttendanceRecord record = records.findFirstByWorkerIdAndCheckOutIsNullOrderByCheckInDesc(worker.getId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, worker.getName() + " has no active check-in"));
         try {
@@ -127,10 +130,11 @@ public class AttendanceController {
     }
 
     @GetMapping
-    public List<AttendanceView> history(@RequestParam UUID workerId,
+    public List<AttendanceView> history(@RequestAttribute("authenticatedUserEmail") String ownerEmail,
+                                        @RequestParam UUID workerId,
                                         @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
                                         @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
-        Worker worker = findWorker(workerId);
+        Worker worker = findWorker(workerId, ownerEmail);
         ZoneId zone = ZoneId.of(assignedShift(worker).getZoneId());
         LocalDate today = LocalDate.now(clock.withZone(zone));
         LocalDate first = from == null ? (to == null ? today.minusDays(30) : to.minusDays(30)) : from;
@@ -144,8 +148,8 @@ public class AttendanceController {
 
     @GetMapping("/status")
     @Transactional
-    public StatusView status(@RequestParam UUID workerId) {
-        Worker worker = findWorker(workerId);
+    public StatusView status(@RequestAttribute("authenticatedUserEmail") String ownerEmail, @RequestParam UUID workerId) {
+        Worker worker = findWorker(workerId, ownerEmail);
         AttendanceShift shift = assignedShift(worker);
         ZoneId zone = ZoneId.of(shift.getZoneId());
         LocalDate today = LocalDate.now(clock.withZone(zone));
@@ -156,15 +160,15 @@ public class AttendanceController {
         return new StatusView(open.isPresent(), ShiftView.from(shift), current.map(AttendanceView::from).orElse(null));
     }
 
-    private Worker activeWorker(UUID workerId) {
-        Worker worker = findWorker(workerId);
+    private Worker activeWorker(UUID workerId, String ownerEmail) {
+        Worker worker = findWorker(workerId, ownerEmail);
         if (!worker.isActive()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Worker is inactive");
         return worker;
     }
 
-    private Worker findWorker(UUID workerId) {
+    private Worker findWorker(UUID workerId, String ownerEmail) {
         if (workerId == null) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Select a worker first");
-        return workers.findById(workerId).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Worker not found"));
+        return workers.findByIdAndOwnerEmail(workerId, ownerEmail).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Worker not found"));
     }
 
     private AttendanceShift assignedShift(Worker worker) {

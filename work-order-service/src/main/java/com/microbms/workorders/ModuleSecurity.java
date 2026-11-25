@@ -32,7 +32,7 @@ public class ModuleSecurity {
                 String header=request.getHeader(HttpHeaders.AUTHORIZATION);
                 if(header!=null && header.startsWith("Bearer ")) try {
                     Claims claims=Jwts.parser().verifyWith(key).build().parseSignedClaims(header.substring(7)).getPayload();
-                    String subject=claims.getSubject(); if(subject!=null) org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(new UsernamePasswordAuthenticationToken(subject,null,AuthorityUtils.createAuthorityList("ROLE_USER")));
+                    String subject=claims.getSubject(); String email=claims.get("email",String.class); if(subject!=null && email!=null) { request.setAttribute("authenticatedUserId",subject); request.setAttribute("authenticatedUserEmail",email); org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(new UsernamePasswordAuthenticationToken(subject,null,AuthorityUtils.createAuthorityList("ROLE_USER"))); }
                 } catch(RuntimeException ignored) { org.springframework.security.core.context.SecurityContextHolder.clearContext(); }
                 chain.doFilter(request,response);
             }
